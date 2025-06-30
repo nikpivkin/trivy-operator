@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	gomegatypes "github.com/onsi/gomega/types"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/aquasecurity/trivy-operator/pkg/apis/aquasecurity/v1alpha1"
+	"github.com/aquasecurity/trivy-operator/pkg/trivyoperator"
 	"github.com/aquasecurity/trivy-operator/tests/itest/helper"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -21,6 +24,7 @@ import (
 // Inputs represents required inputs to shared behavior containers.
 type Inputs struct {
 	AssertTimeout         time.Duration
+	OperatorNamespace     string
 	PrimaryNamespace      string
 	PrimaryWorkloadPrefix string
 
@@ -454,5 +458,81 @@ func ConfigurationCheckerBehavior(inputs *Inputs) func() {
 			})
 
 		})
+
+		Context("When policies ConfigMap is updated", func() {
+			var ctx context.Context
+			var pod *corev1.Pod
+
+			BeforeEach(func() {
+				By("Creating Pod")
+				ctx = context.Background()
+				pod = helper.NewPod().
+					WithRandomName("unmanaged-vuln-image").
+					WithNamespace(inputs.PrimaryNamespace).
+					WithContainer("vuln-image", "mirror.gcr.io/knqyf263/vuln-image:1.2.3", []string{"/bin/sh", "-c", "--"}, []string{"while true; do sleep 30; done;"}).
+					Build()
+
+				Expect(inputs.Create(ctx, pod)).To(Succeed())
+			})
+
+			It("Should update ConfigAuditReport", func() {
+				By("Waiting for initial report without USER-0001")
+				Eventually(inputs.GetConfigAuditReportOwnedBy(ctx, pod), inputs.AssertTimeout).ShouldNot(hasCheckWithID("USER-0001"))
+
+				By("Creating policies ConfigMap")
+				cm := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      trivyoperator.PoliciesConfigMapName,
+						Namespace: inputs.OperatorNamespace,
+					},
+					Data: map[string]string{
+						"policy.gcr_registry.kinds": "*",
+						"policy.gcr_registry.rego": `# METADATA
+# custom:
+#   id: USER-0001
+#   avd_id: USER-0001
+package trivyoperator.test0001
+
+import data.lib.kubernetes
+
+import rego.v1
+
+deny contains res if {
+  some container in kubernetes.containers
+  startswith(container.image, "mirror.gcr.io")
+  res := result.new("mirror.gcr.io registry is not allowed", container)
+}
+`,
+					},
+				}
+
+				Expect(inputs.Create(ctx, cm)).To(Succeed())
+				DeferCleanup(func() {
+					_ = inputs.Delete(ctx, cm)
+				})
+
+				By("Verifying that new check with ID USER-0001 appears")
+				Eventually(inputs.GetConfigAuditReportOwnedBy(ctx, pod), inputs.AssertTimeout).
+					Should(hasCheckWithID("USER-0001"))
+			})
+
+			AfterEach(func() {
+				err := inputs.Delete(ctx, pod)
+				Expect(err).To(Succeed())
+			})
+
+		})
 	}
+}
+
+func hasCheckWithID(targetID string) gomegatypes.GomegaMatcher {
+	return WithTransform(func(reports v1alpha1.ConfigAuditReportList) []string {
+		var allIDs []string
+		for _, report := range reports.Items {
+			for _, check := range report.Report.Checks {
+				allIDs = append(allIDs, check.ID)
+			}
+		}
+		return allIDs
+	}, ContainElement(targetID))
 }

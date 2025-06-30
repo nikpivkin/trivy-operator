@@ -359,11 +359,11 @@ func (h *Helper) HasVulnerabilityReportOwnedBy(ctx context.Context, obj client.O
 	}
 }
 
-func (h *Helper) HasConfigAuditReportOwnedBy(ctx context.Context, obj client.Object) func() (bool, error) {
-	return func() (bool, error) {
+func (h *Helper) GetConfigAuditReportOwnedBy(ctx context.Context, obj client.Object) func() (v1alpha1.ConfigAuditReportList, error) {
+	return func() (v1alpha1.ConfigAuditReportList, error) {
 		gvk, err := apiutil.GVKForObject(obj, h.scheme)
 		if err != nil {
-			return false, err
+			return v1alpha1.ConfigAuditReportList{}, err
 		}
 		var reportsList v1alpha1.ConfigAuditReportList
 		err = h.kubeClient.List(ctx, &reportsList, client.MatchingLabels{
@@ -372,9 +372,18 @@ func (h *Helper) HasConfigAuditReportOwnedBy(ctx context.Context, obj client.Obj
 			trivyoperator.LabelResourceNamespace: obj.GetNamespace(),
 		})
 		if err != nil {
+			return v1alpha1.ConfigAuditReportList{}, err
+		}
+		return reportsList, nil
+	}
+}
+
+func (h *Helper) HasConfigAuditReportOwnedBy(ctx context.Context, obj client.Object) func() (bool, error) {
+	return func() (bool, error) {
+		reportsList, err := h.GetConfigAuditReportOwnedBy(ctx, obj)()
+		if err != nil {
 			return false, err
 		}
-
 		return len(reportsList.Items) == 1 && reportsList.Items[0].DeletionTimestamp == nil, nil
 	}
 }
