@@ -24,7 +24,6 @@ import (
 	"github.com/aquasecurity/trivy-operator/pkg/infraassessment"
 	"github.com/aquasecurity/trivy-operator/pkg/kube"
 	"github.com/aquasecurity/trivy-operator/pkg/operator/etc"
-	"github.com/aquasecurity/trivy-operator/pkg/policy"
 	"github.com/aquasecurity/trivy-operator/pkg/trivyoperator"
 
 	. "github.com/aquasecurity/trivy-operator/pkg/operator/predicate"
@@ -37,13 +36,12 @@ type NodeCollectorJobController struct {
 	etc.Config
 	kube.ObjectResolver
 	kube.LogsReader
-	PolicyLoader policy.Loader
 	trivyoperator.ConfigData
 	trivyoperator.PluginContext
 	configauditreport.PluginInMemory
 	InfraReadWriter infraassessment.ReadWriter
 	trivyoperator.BuildInfo
-	ChecksLoader *ChecksLoader
+	ChecksManager PolicyManager
 }
 
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
@@ -141,7 +139,7 @@ func (r *NodeCollectorJobController) processCompleteScanJob(ctx context.Context,
 		return fmt.Errorf("computing spec hash: %w", err)
 	}
 
-	policies, err := r.ChecksLoader.GetPolicies(ctx)
+	policies, err := r.ChecksManager.GetPolicies(ctx)
 	if err != nil {
 		return fmt.Errorf("get policies: %w", err)
 	}

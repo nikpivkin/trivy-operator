@@ -477,6 +477,7 @@ func ConfigurationCheckerBehavior(inputs *Inputs) func() {
 
 			It("Should update ConfigAuditReport", func() {
 				By("Waiting for initial report without USER-0001")
+				Eventually(inputs.HasConfigAuditReportOwnedBy(ctx, pod), inputs.AssertTimeout).Should(BeTrue())
 				Eventually(inputs.GetConfigAuditReportOwnedBy(ctx, pod), inputs.AssertTimeout).ShouldNot(hasCheckWithID("USER-0001"))
 
 				By("Creating policies ConfigMap")
@@ -486,22 +487,20 @@ func ConfigurationCheckerBehavior(inputs *Inputs) func() {
 						Namespace: inputs.OperatorNamespace,
 					},
 					Data: map[string]string{
-						"policy.gcr_registry.kinds": "*",
+						"policy.gcr_registry.kinds": "Pod",
 						"policy.gcr_registry.rego": `# METADATA
+# description: test
 # custom:
 #   id: USER-0001
 #   avd_id: USER-0001
+#   severity: HIGH
 package trivyoperator.test0001
 
 import data.lib.kubernetes
 
 import rego.v1
 
-deny contains res if {
-  some container in kubernetes.containers
-  startswith(container.image, "mirror.gcr.io")
-  res := result.new("mirror.gcr.io registry is not allowed", container)
-}
+deny contains result.new("fail", {})
 `,
 					},
 				}
@@ -526,13 +525,11 @@ deny contains res if {
 }
 
 func hasCheckWithID(targetID string) gomegatypes.GomegaMatcher {
-	return WithTransform(func(reports v1alpha1.ConfigAuditReportList) []string {
-		var allIDs []string
+	return WithTransform(func(reports v1alpha1.ConfigAuditReportList) []v1alpha1.Check {
+		var allChecks []v1alpha1.Check
 		for _, report := range reports.Items {
-			for _, check := range report.Report.Checks {
-				allIDs = append(allIDs, check.ID)
-			}
+			allChecks = append(allChecks, report.Report.Checks...)
 		}
-		return allIDs
-	}, ContainElement(targetID))
+		return allChecks
+	}, ContainElement(HaveField("ID", targetID)))
 }

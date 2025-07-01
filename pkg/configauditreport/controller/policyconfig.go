@@ -22,7 +22,6 @@ import (
 	"github.com/aquasecurity/trivy-operator/pkg/kube"
 	"github.com/aquasecurity/trivy-operator/pkg/operator/etc"
 	"github.com/aquasecurity/trivy-operator/pkg/operator/predicate"
-	"github.com/aquasecurity/trivy-operator/pkg/policy"
 	"github.com/aquasecurity/trivy-operator/pkg/trivyoperator"
 )
 
@@ -34,7 +33,7 @@ type PolicyConfigController struct {
 	etc.Config
 	kube.ObjectResolver
 	trivyoperator.PluginContext
-	PolicyLoader policy.Loader
+	ChecksManager PolicyManager
 	configauditreport.PluginInMemory
 	ClusterVersion string
 }
@@ -69,15 +68,13 @@ func (r *PolicyConfigController) SetupWithManager(mgr ctrl.Manager) error {
 	resources = append(resources, workloadResources...)
 	for _, configResource := range resources {
 		if err := ctrl.NewControllerManagedBy(mgr).
-			For(&corev1.ConfigMap{}, builder.WithPredicates(
+			For(&v1alpha1.ConfigScanRequest{}, builder.WithPredicates(
 				predicate.Not(predicate.IsBeingTerminated),
-				predicate.HasName(trivyoperator.PoliciesConfigMapName),
 				predicate.InNamespace(r.Config.Namespace),
 			)).
 			Complete(r.reconcileConfig(configResource.Kind)); err != nil {
 			return fmt.Errorf("constructing controller for %s: %w", configResource.Kind, err)
 		}
-
 	}
 
 	clusterResources := []kube.Resource{
@@ -88,9 +85,8 @@ func (r *PolicyConfigController) SetupWithManager(mgr ctrl.Manager) error {
 
 	for _, resource := range clusterResources {
 		err := ctrl.NewControllerManagedBy(mgr).
-			For(&corev1.ConfigMap{}, builder.WithPredicates(
+			For(&v1alpha1.ConfigScanRequest{}, builder.WithPredicates(
 				predicate.Not(predicate.IsBeingTerminated),
-				predicate.HasName(trivyoperator.PoliciesConfigMapName),
 				predicate.InNamespace(r.Config.Namespace))).
 			Complete(r.reconcileClusterConfig(resource.Kind))
 		if err != nil {
@@ -99,28 +95,22 @@ func (r *PolicyConfigController) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return nil
-
 }
 
 func (r *PolicyConfigController) reconcileConfig(kind kube.Kind) reconcile.Func {
 	return func(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-		log := r.Logger.WithValues("configMap", req.NamespacedName)
+		log := r.Logger.WithValues("scanRequest", req.NamespacedName, "kind", kind)
 
-		cm := &corev1.ConfigMap{}
-
-		err := r.Client.Get(ctx, req.NamespacedName, cm)
-		if err != nil {
+		csr := &v1alpha1.ConfigScanRequest{}
+		if err := r.Client.Get(ctx, req.NamespacedName, csr); err != nil {
 			if errors.IsNotFound(err) {
-				log.V(1).Info("Ignoring cached ConfigMap that must have been deleted")
+				log.V(1).Info("Ignoring cached ConfigScanRequest that must have been deleted")
 				return ctrl.Result{}, nil
 			}
-			return ctrl.Result{}, fmt.Errorf("getting ConfigMap from cache: %w", err)
+			return ctrl.Result{}, fmt.Errorf("getting ConfigScanRequest from cache: %w", err)
 		}
-		cac, err := r.NewConfigForConfigAudit(r.PluginContext)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		policies, err := Policies(ctx, r.Config, r.Client, cac, r.Logger, r.PolicyLoader, r.ClusterVersion)
+
+		policies, err := r.ChecksManager.GetPolicies(ctx)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("getting policies: %w", err)
 		}
@@ -136,22 +126,24 @@ func (r *PolicyConfigController) reconcileConfig(kind kube.Kind) reconcile.Func 
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("parsing label selector: %w", err)
 		}
+
+		log.V(1).Info("Delete config reports", "selector", labelSelector.String())
 		carl := v1alpha1.ConfigAuditReportList{}
-		configRequeueAfter, err := r.deleteReports(ctx, labelSelector, &carl, auditConfigReportItems(&carl))
+		configRequeueAfter, err := r.deleteReports(ctx, log, labelSelector, &carl, auditConfigReportItems(&carl))
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		var rbacRequeueAfter bool
 		if r.RbacAssessmentScannerEnabled {
 			cral := v1alpha1.RbacAssessmentReportList{}
-			rbacRequeueAfter, err = r.deleteReports(ctx, labelSelector, &cral, rbacReportItems(&cral))
+			rbacRequeueAfter, err = r.deleteReports(ctx, log, labelSelector, &cral, rbacReportItems(&cral))
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 		if r.InfraAssessmentScannerEnabled {
 			ial := v1alpha1.InfraAssessmentReportList{}
-			rbacRequeueAfter, err = r.deleteReports(ctx, labelSelector, &ial, infraReportItems(&ial))
+			rbacRequeueAfter, err = r.deleteReports(ctx, log, labelSelector, &ial, infraReportItems(&ial))
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -163,7 +155,7 @@ func (r *PolicyConfigController) reconcileConfig(kind kube.Kind) reconcile.Func 
 	}
 }
 
-func (r *PolicyConfigController) deleteReports(ctx context.Context, labelSelector labels.Selector, reportList client.ObjectList, reportItems func() []client.Object) (bool, error) {
+func (r *PolicyConfigController) deleteReports(ctx context.Context, log logr.Logger, labelSelector labels.Selector, reportList client.ObjectList, reportItems func() []client.Object) (bool, error) {
 	err := r.Client.List(ctx, reportList,
 		client.Limit(r.Config.BatchDeleteLimit+1),
 		client.MatchingLabelsSelector{Selector: labelSelector})
@@ -171,6 +163,11 @@ func (r *PolicyConfigController) deleteReports(ctx context.Context, labelSelecto
 		return false, fmt.Errorf("listing reports: %w", err)
 	}
 	items := reportItems()
+	log = log.WithValues("crd", fmt.Sprintf("%T", reportList))
+	if len(items) > 0 {
+		log.V(1).Info("Items found for deletion", "count", len(items))
+	}
+
 	reportSize := len(items)
 	for i := 0; i < ext.MinInt(r.Config.BatchDeleteLimit, reportSize); i++ {
 		reportItem := items[i]
@@ -178,6 +175,7 @@ func (r *PolicyConfigController) deleteReports(ctx context.Context, labelSelecto
 		if err != nil {
 			return b, err
 		}
+		log.V(1).Info("Report deleted", "name", reportItem.GetName(), "namespace", reportItem.GetNamespace())
 	}
 	return reportSize-r.Config.BatchDeleteLimit > 0, nil
 }
@@ -194,23 +192,18 @@ func (r *PolicyConfigController) deleteReport(ctx context.Context, report client
 
 func (r *PolicyConfigController) reconcileClusterConfig(kind kube.Kind) reconcile.Func {
 	return func(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-		log := r.Logger.WithValues("configMap", req.NamespacedName)
+		log := r.Logger.WithValues("scanRequest", req.NamespacedName)
 
-		cm := &corev1.ConfigMap{}
-
-		err := r.Client.Get(ctx, req.NamespacedName, cm)
-		if err != nil {
+		csr := &v1alpha1.ConfigScanRequest{}
+		if err := r.Client.Get(ctx, req.NamespacedName, csr); err != nil {
 			if errors.IsNotFound(err) {
-				log.V(1).Info("Ignoring cached ConfigMap that must have been deleted")
+				log.V(1).Info("Ignoring cached ConfigScanRequest that must have been deleted")
 				return ctrl.Result{}, nil
 			}
-			return ctrl.Result{}, fmt.Errorf("getting ConfigMap from cache: %w", err)
+			return ctrl.Result{}, fmt.Errorf("getting ConfigScanRequest from cache: %w", err)
 		}
-		cac, err := r.NewConfigForConfigAudit(r.PluginContext)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		policies, err := Policies(ctx, r.Config, r.Client, cac, r.Logger, r.PolicyLoader)
+
+		policies, err := r.ChecksManager.GetPolicies(ctx)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("getting policies: %w", err)
 		}
@@ -227,14 +220,14 @@ func (r *PolicyConfigController) reconcileClusterConfig(kind kube.Kind) reconcil
 			return ctrl.Result{}, fmt.Errorf("parsing label selector: %w", err)
 		}
 		cacrl := v1alpha1.ClusterConfigAuditReportList{}
-		configRequeueAfter, err := r.deleteReports(ctx, labelSelector, &cacrl, clusterAuditConfigReportItems(&cacrl))
+		configRequeueAfter, err := r.deleteReports(ctx, log, labelSelector, &cacrl, clusterAuditConfigReportItems(&cacrl))
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		var rbacRequeueAfter bool
 		if r.RbacAssessmentScannerEnabled {
 			rarl := v1alpha1.ClusterRbacAssessmentReportList{}
-			rbacRequeueAfter, err = r.deleteReports(ctx, labelSelector, &rarl, clusterRbacReportItems(&rarl))
+			rbacRequeueAfter, err = r.deleteReports(ctx, log, labelSelector, &rarl, clusterRbacReportItems(&rarl))
 			if err != nil {
 				return ctrl.Result{}, err
 			}

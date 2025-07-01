@@ -85,13 +85,9 @@ func NewPolicies(data map[string]string, cac configauditreport.ConfigAuditConfig
 func (p *Policies) Libraries() map[string]string {
 	libs := make(map[string]string)
 	for key, value := range p.data {
-		if !strings.HasPrefix(key, keyPrefixLibrary) {
-			continue
+		if strings.HasPrefix(key, keyPrefixLibrary) && strings.HasSuffix(key, keySuffixRego) {
+			libs[key] = value
 		}
-		if !strings.HasSuffix(key, keySuffixRego) {
-			continue
-		}
-		libs[key] = value
 	}
 	return libs
 }
@@ -190,24 +186,33 @@ func (p *Policies) ModulesByKind(kind string) (map[string]string, error) {
 func (p *Policies) Load() error {
 	var err error
 
+	p.log.V(1).Info("Load Rego checks", "useBuiltin", p.cac.GetUseBuiltinRegoPolicies())
 	if p.cac.GetUseBuiltinRegoPolicies() {
 		p.loaded, _, err = p.policyLoader.GetPoliciesAndBundlePath()
 		if err != nil {
 			return err
 		}
+		if len(p.loaded) > 0 {
+			p.log.V(1).Info("Builtin checks loaded", "count", len(p.loaded))
+		}
 	}
 
-	for _, lib := range p.Libraries() {
+	libs := p.Libraries()
+	if len(libs) > 0 {
+		p.log.V(1).Info("Custom Rego libraries loaded", "count", len(libs))
+	}
+	for _, lib := range libs {
 		p.loaded = append(p.loaded, lib)
 	}
 
+	customCount := 0
 	for key, policy := range p.data {
-		if !strings.HasSuffix(key, keySuffixRego) {
-			continue
+		if strings.HasPrefix(key, keyPrefixPolicy) && strings.HasSuffix(key, keySuffixRego) {
+			p.loaded = append(p.loaded, policy)
+			customCount++
 		}
-		p.loaded = append(p.loaded, policy)
 	}
-
+	p.log.V(1).Info("Custom Rego checks loaded", "count", customCount)
 	return nil
 }
 
@@ -371,6 +376,7 @@ func (p *Policies) scannerOptions(dataPaths []string, dataFS fs.FS, hasPolicies 
 		rego.WithDataDirs(dataPaths...),
 	}
 	if !hasPolicies && p.cac.GetUseEmbeddedRegoPolicies() {
+		p.log.V(1).Info("Use embedded Rego checks")
 		return append(optionsArray, rego.WithEmbeddedPolicies(true), rego.WithEmbeddedLibraries(true))
 	}
 	return append(optionsArray,

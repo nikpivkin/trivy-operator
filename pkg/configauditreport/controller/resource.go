@@ -41,7 +41,6 @@ import (
 type ResourceController struct {
 	logr.Logger
 	etc.Config
-	PolicyLoader policy.Loader
 	trivyoperator.ConfigData
 	kube.ObjectResolver
 	trivyoperator.PluginContext
@@ -52,7 +51,7 @@ type ResourceController struct {
 	trivyoperator.BuildInfo
 	ClusterVersion   string
 	CacheSyncTimeout time.Duration
-	ChecksLoader     *ChecksLoader
+	ChecksManager    PolicyManager
 }
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -177,7 +176,7 @@ func (r *ResourceController) reconcileResource(resourceKind kube.Kind) reconcile
 			return ctrl.Result{}, err
 		}
 
-		policies, err := r.ChecksLoader.GetPolicies(ctx)
+		policies, err := r.ChecksManager.GetPolicies(ctx)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("get policies: %w", err)
 		}
@@ -213,6 +212,8 @@ func (r *ResourceController) reconcileResource(resourceKind kube.Kind) reconcile
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("computing policies hash: %w", err)
 		}
+
+		log = log.WithValues("resourceHash", resourceHash, "policyHash", policiesHash)
 
 		resourceLabelsToInclude := r.GetReportResourceLabels()
 		additionalCustomLabel, err := r.GetAdditionalReportLabels()

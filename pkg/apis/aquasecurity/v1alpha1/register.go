@@ -45,6 +45,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ClusterSbomReportList{},
 		&ClusterVulnerabilityReport{},
 		&ClusterVulnerabilityReportList{},
+		&ConfigScanRequest{},
+		&ConfigScanRequestList{},
 	)
 	meta.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

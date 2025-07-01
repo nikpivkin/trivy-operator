@@ -228,7 +228,7 @@ func Start(ctx context.Context, buildInfo trivyoperator.BuildInfo, operatorConfi
 		}
 	}
 	var policyLoader policy.Loader
-	var checksLoader *controller.ChecksLoader
+	var checksLoader *controller.ChecksController
 	if operatorConfig.ConfigAuditScannerEnabled {
 		policyLoader = buildPolicyLoader(trivyOperatorConfig)
 		checksLoader = controller.NewChecksLoader(
@@ -294,7 +294,6 @@ func Start(ctx context.Context, buildInfo trivyoperator.BuildInfo, operatorConfi
 		if err = (&controller.ResourceController{
 			Logger:           ctrl.Log.WithName("resourcecontroller"),
 			Config:           operatorConfig,
-			PolicyLoader:     policyLoader,
 			ConfigData:       trivyOperatorConfig,
 			ObjectResolver:   objectResolver,
 			PluginContext:    pluginContext,
@@ -305,18 +304,18 @@ func Start(ctx context.Context, buildInfo trivyoperator.BuildInfo, operatorConfi
 			BuildInfo:        buildInfo,
 			ClusterVersion:   gitVersion,
 			CacheSyncTimeout: *operatorConfig.ControllerCacheSyncTimeout,
-			ChecksLoader:     checksLoader,
+			ChecksManager:    checksLoader,
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("unable to setup resource controller: %w", err)
 		}
 		if err = (&controller.PolicyConfigController{
-			Logger:         ctrl.Log.WithName("resourcecontroller"),
+			Logger:         ctrl.Log.WithName("policyconfigcontroller"),
 			Config:         operatorConfig,
-			PolicyLoader:   policyLoader,
 			ObjectResolver: objectResolver,
 			PluginContext:  pluginContext,
 			PluginInMemory: pluginConfig,
 			ClusterVersion: gitVersion,
+			ChecksManager:  checksLoader,
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("unable to setup policy config controller: %w", err)
 		}
@@ -343,12 +342,11 @@ func Start(ctx context.Context, buildInfo trivyoperator.BuildInfo, operatorConfi
 				ConfigData:      trivyOperatorConfig,
 				ObjectResolver:  objectResolver,
 				LogsReader:      logsReader,
-				PolicyLoader:    policyLoader,
 				PluginContext:   pluginContext,
 				PluginInMemory:  pluginConfig,
 				InfraReadWriter: infraassessment.NewReadWriter(&objectResolver),
 				BuildInfo:       buildInfo,
-				ChecksLoader:    checksLoader,
+				ChecksManager:   checksLoader,
 			}).SetupWithManager(mgr); err != nil {
 				return fmt.Errorf("unable to setup node collector controller: %w", err)
 			}

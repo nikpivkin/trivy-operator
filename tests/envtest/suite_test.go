@@ -178,7 +178,6 @@ var _ = BeforeSuite(func() {
 		Logger:          ctrl.Log.WithName("resourcecontroller"),
 		Config:          config,
 		ConfigData:      trivyOperatorConfig,
-		PolicyLoader:    &TestLoader{},
 		ObjectResolver:  objectResolver,
 		PluginContext:   pluginContext,
 		PluginInMemory:  pluginca,
@@ -186,7 +185,7 @@ var _ = BeforeSuite(func() {
 		RbacReadWriter:  rbacassessment.NewReadWriter(&objectResolver),
 		InfraReadWriter: infraassessment.NewReadWriter(&objectResolver),
 		BuildInfo:       buildInfo,
-		ChecksLoader:    checksLoader,
+		ChecksManager:   checksLoader,
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
