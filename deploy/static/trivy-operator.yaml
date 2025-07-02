@@ -1694,8 +1694,8 @@ spec:
     listKind: ConfigScanRequestList
     plural: configscanrequests
     shortNames:
-    - scanreq
-    - scanrequests
+    - configscanreq
+    - configscanrequests
     singular: configscanrequest
   scope: Namespaced
   versions:
@@ -3464,6 +3464,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - aquasecurity.github.io
+  resources:
+  - configscanrequests
+  verbs:
+  - create
+  - get
+  - list
   - watch
 - apiGroups:
   - aquasecurity.github.io

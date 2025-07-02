@@ -113,6 +113,9 @@ func (r *ChecksController) loadChecks(ctx context.Context) error {
 	return nil
 }
 
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups=aquasecurity.github.io,resources=configscanrequests,verbs=create
+
 func (r *ChecksController) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.ConfigMap{}, builder.WithPredicates(

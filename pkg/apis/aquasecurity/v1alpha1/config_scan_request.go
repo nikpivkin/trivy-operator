@@ -3,7 +3,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:shortName={scanreq,scanrequests}
+// +kubebuilder:resource:shortName={configscanreq,configscanrequests}
 
 type ConfigScanRequest struct {
 	metav1.TypeMeta   `json:",inline"`

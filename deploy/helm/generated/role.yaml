@@ -222,6 +222,15 @@ rules:
 - apiGroups:
   - aquasecurity.github.io
   resources:
+  - configscanrequests
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - aquasecurity.github.io
+  resources:
   - exposedsecretreports
   verbs:
   - create

@@ -12,8 +12,8 @@ spec:
     listKind: ConfigScanRequestList
     plural: configscanrequests
     shortNames:
-    - scanreq
-    - scanrequests
+    - configscanreq
+    - configscanrequests
     singular: configscanrequest
   scope: Namespaced
   versions:
